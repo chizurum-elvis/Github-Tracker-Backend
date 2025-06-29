@@ -45,6 +45,7 @@ def github_callback(code: str):
         )
         token_res.raise_for_status()
         access_token = token_res.json().get("access_token")
+        print("GitHub access_token response:", token_res.json())
         if not access_token:
             raise HTTPException(400, "Missing GitHub token")
 
