@@ -1,42 +1,47 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 import os
-import requests
 from dotenv import load_dotenv
 from auth import router as auth_router
 
+# Load env variables
 load_dotenv()
+
 app = FastAPI()
 
-# CORS
+# Validate frontend URL
+frontend_url = os.getenv("FRONTEND_URL")
+if not frontend_url:
+    raise RuntimeError("FRONTEND_URL is not set in the .env file")
+
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("FRONTEND_URL")],
+    allow_origins=[frontend_url],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include Auth routes
+# Register routers
 app.include_router(auth_router)
 
-# JWT validation
+# JWT middleware (optional extra protection)
 security = HTTPBearer()
 JWT_SECRET = os.getenv("JWT_SECRET")
 
-def get_current_user(token: str = Depends(security)):
+
+@app.get("/")
+def root():
+    return {"message": "GitHub OAuth Backend running"}
+
+
+@app.get("/me")
+def get_current_user(token: HTTPAuthorizationCredentials = Depends(security)):
     try:
         payload = jwt.decode(token.credentials, JWT_SECRET, algorithms=["HS256"])
-        return payload
+        return {"username": payload.get("sub"), "name": payload.get("name"), "avatar_url": payload.get("avatar_url")}
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-# Protected endpoint
-@app.get("/github/private")
-def get_private_data(current_user: dict = Depends(get_current_user)):
-    github_username = current_user["sub"]
-    res = requests.get(f"https://api.github.com/users/{github_username}/repos?visibility=private",
-                       headers={"Authorization": f"token {os.getenv('GITHUB_PERSONAL_TOKEN')}"})
-    return res.json()

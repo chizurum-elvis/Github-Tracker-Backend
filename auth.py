@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
 from jose import jwt
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -15,44 +16,76 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 BACKEND_URL = os.getenv("BACKEND_URL")
 JWT_SECRET = os.getenv("JWT_SECRET")
 
+# In-memory token store (in production, use a DB or Redis)
+token_store = {}
+
 
 @router.get("/login/github")
 def github_login():
     redirect_uri = f"{BACKEND_URL}/auth/github/callback"
-    github_url = f"https://github.com/login/oauth/authorize?client_id={CLIENT_ID}&redirect_uri={redirect_uri}&scope=repo"
+    github_url = (
+        f"https://github.com/login/oauth/authorize?client_id={CLIENT_ID}"
+        f"&redirect_uri={redirect_uri}&scope=read:user repo"
+    )
     return RedirectResponse(github_url)
 
 
 @router.get("/auth/github/callback")
 def github_callback(code: str):
-    # Exchange code for access token
     token_url = "https://github.com/login/oauth/access_token"
     headers = {"Accept": "application/json"}
     data = {
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
-        "code": code
+        "code": code,
     }
+
     token_res = requests.post(token_url, data=data, headers=headers)
-    token_json = token_res.json()
-    access_token = token_json.get("access_token")
+    if token_res.status_code != 200:
+        raise HTTPException(status_code=502, detail="GitHub token exchange failed")
 
+    access_token = token_res.json().get("access_token")
     if not access_token:
-        raise HTTPException(status_code=400, detail="Token exchange failed")
+        raise HTTPException(status_code=400, detail="Token missing")
 
-    # Fetch user info
-    user_res = requests.get("https://api.github.com/user", headers={
-        "Authorization": f"token {access_token}"
-    })
+    user_res = requests.get(
+        "https://api.github.com/user",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+    if user_res.status_code != 200:
+        raise HTTPException(status_code=502, detail="GitHub user fetch failed")
+
     user = user_res.json()
+    username = user["login"]
 
-    # (Optional) Generate JWT
+    # Store token securely (in-memory for demo)
+    token_store[username] = access_token
+
+    expires = datetime.utcnow() + timedelta(minutes=30)
     jwt_token = jwt.encode({
-        "sub": user["login"],
+        "sub": username,
         "name": user.get("name"),
-        "avatar_url": user.get("avatar_url")
+        "avatar_url": user.get("avatar_url"),
+        "exp": expires
     }, JWT_SECRET, algorithm="HS256")
 
-    # Redirect to frontend with JWT
-    redirect_with_token = f"{FRONTEND_URL}?token={jwt_token}"
-    return RedirectResponse(redirect_with_token)
+    return RedirectResponse(f"{FRONTEND_URL}/?token={jwt_token}")
+
+
+@router.get("/github/private")
+def get_private_repos(token: str):
+    from jose import JWTError
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        username = payload["sub"]
+        access_token = token_store.get(username)
+        if not access_token:
+            raise HTTPException(status_code=401, detail="No GitHub token found")
+
+        res = requests.get(
+            "https://api.github.com/user/repos?visibility=private",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        return res.json()
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
