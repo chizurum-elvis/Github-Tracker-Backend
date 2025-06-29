@@ -1,91 +1,116 @@
 import os
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import RedirectResponse
-from dotenv import load_dotenv
-from jose import jwt
+from jose import jwt, JWTError
 from datetime import datetime, timedelta
+from redis_client import redis_client
+from dotenv import load_dotenv
 
 load_dotenv()
 
 router = APIRouter()
-
 CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 BACKEND_URL = os.getenv("BACKEND_URL")
 JWT_SECRET = os.getenv("JWT_SECRET")
 
-# In-memory token store (in production, use a DB or Redis)
-token_store = {}
-
+def generate_jwt(username: str, name: str, avatar_url: str):
+    payload = {
+        "sub": username,
+        "name": name,
+        "avatar_url": avatar_url,
+        "exp": datetime.utcnow() + timedelta(minutes=30)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
 @router.get("/login/github")
 def github_login():
     redirect_uri = f"{BACKEND_URL}/auth/github/callback"
-    github_url = (
-        f"https://github.com/login/oauth/authorize?client_id={CLIENT_ID}"
-        f"&redirect_uri={redirect_uri}&scope=read:user repo"
-    )
-    return RedirectResponse(github_url)
-
+    url = f"https://github.com/login/oauth/authorize?client_id={CLIENT_ID}&redirect_uri={redirect_uri}&scope=repo"
+    return RedirectResponse(url)
 
 @router.get("/auth/github/callback")
 def github_callback(code: str):
-    token_url = "https://github.com/login/oauth/access_token"
-    headers = {"Accept": "application/json"}
-    data = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "code": code,
-    }
+    try:
+        token_res = requests.post(
+            "https://github.com/login/oauth/access_token",
+            data={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "code": code
+            },
+            headers={"Accept": "application/json"}
+        )
+        token_res.raise_for_status()
+        access_token = token_res.json().get("access_token")
+        if not access_token:
+            raise HTTPException(400, "Missing GitHub token")
 
-    token_res = requests.post(token_url, data=data, headers=headers)
-    if token_res.status_code != 200:
-        raise HTTPException(status_code=502, detail="GitHub token exchange failed")
+        user_res = requests.get("https://api.github.com/user", headers={
+            "Authorization": f"Bearer {access_token}"
+        })
+        user_res.raise_for_status()
+        user = user_res.json()
+        username = user["login"]
 
-    access_token = token_res.json().get("access_token")
-    if not access_token:
-        raise HTTPException(status_code=400, detail="Token missing")
+        redis_client.set(username, access_token)
+        token = generate_jwt(username, user.get("name"), user.get("avatar_url"))
+        return RedirectResponse(f"{FRONTEND_URL}?token={token}")
 
-    user_res = requests.get(
-        "https://api.github.com/user",
-        headers={"Authorization": f"Bearer {access_token}"}
-    )
-    if user_res.status_code != 200:
-        raise HTTPException(status_code=502, detail="GitHub user fetch failed")
-
-    user = user_res.json()
-    username = user["login"]
-
-    # Store token securely (in-memory for demo)
-    token_store[username] = access_token
-
-    expires = datetime.utcnow() + timedelta(minutes=30)
-    jwt_token = jwt.encode({
-        "sub": username,
-        "name": user.get("name"),
-        "avatar_url": user.get("avatar_url"),
-        "exp": expires
-    }, JWT_SECRET, algorithm="HS256")
-
-    return RedirectResponse(f"{FRONTEND_URL}/?token={jwt_token}")
-
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/github/private")
-def get_private_repos(token: str):
-    from jose import JWTError
+def get_private_repos(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Missing or invalid token")
+    token = auth_header.split()[1]
+
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
         username = payload["sub"]
-        access_token = token_store.get(username)
+        access_token = redis_client.get(username)
         if not access_token:
-            raise HTTPException(status_code=401, detail="No GitHub token found")
+            raise HTTPException(401, "No GitHub token found")
 
         res = requests.get(
             "https://api.github.com/user/repos?visibility=private",
             headers={"Authorization": f"Bearer {access_token}"}
         )
+        res.raise_for_status()
         return res.json()
+
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(401, "Invalid token")
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.post("/logout")
+def logout(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Missing token")
+    token = auth_header.split()[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        redis_client.delete(payload["sub"])
+        return {"message": "Logged out successfully"}
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+
+@router.get("/refresh")
+def refresh_token(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Missing token")
+    token = auth_header.split()[1]
+
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], options={"verify_exp": False})
+        new_token = generate_jwt(payload["sub"], payload.get("name"), payload.get("avatar_url"))
+        return {"token": new_token}
+    except Exception:
+        raise HTTPException(401, "Invalid token")
