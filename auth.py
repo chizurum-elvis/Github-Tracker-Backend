@@ -34,7 +34,7 @@ def github_login():
     if not CLIENT_ID:
         raise HTTPException(500, "GITHUB_CLIENT_ID is not set in the environment variables")
 
-    redirect_uri = f"{BACKEND_URL}/auth/github/callback"
+    redirect_uri = f"https://github-tracker-backend-5bu3.onrender.com/auth/github/callback"
     url = f"https://github.com/login/oauth/authorize?client_id={CLIENT_ID}&redirect_uri={redirect_uri}&scope=repo"
     return RedirectResponse(url)
 
