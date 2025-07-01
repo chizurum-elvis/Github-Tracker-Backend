@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-router = APIRouter()
+router = APIRouter(tags=["Authentication"])
 CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
