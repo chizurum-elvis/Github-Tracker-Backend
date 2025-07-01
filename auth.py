@@ -27,6 +27,13 @@ def generate_jwt(username: str, name: str, avatar_url: str):
 
 @router.get("/login/github")
 def github_login():
+    BACKEND_URL = os.getenv("BACKEND_URL")
+    CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
+    if not BACKEND_URL:
+        raise HTTPException(500, "BACKEND_URL is not set in the environment variables")
+    if not CLIENT_ID:
+        raise HTTPException(500, "GITHUB_CLIENT_ID is not set in the environment variables")
+
     redirect_uri = f"{BACKEND_URL}/auth/github/callback"
     url = f"https://github.com/login/oauth/authorize?client_id={CLIENT_ID}&redirect_uri={redirect_uri}&scope=repo"
     return RedirectResponse(url)
