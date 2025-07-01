@@ -1,14 +1,17 @@
 import redis
 import os
 from dotenv import load_dotenv
-from pathlib import Path
 
-env_path = Path(__file__).resolve().parent / ".env"
-load_dotenv(dotenv_path=env_path)
+load_dotenv()
 
 REDIS_URL = os.getenv("REDIS_URL")
 
 if not REDIS_URL:
     raise ValueError("Missing REDIS_URL environment variable")
 
-redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+# Use redis.from_url and disable SSL cert check
+redis_client = redis.from_url(
+    REDIS_URL,
+    decode_responses=True,
+    ssl_cert_reqs=None  # This disables strict SSL cert validation
+)
