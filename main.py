@@ -9,7 +9,7 @@ from auth import router as auth_router
 # Load env variables
 load_dotenv()
 
-app = FastAPI()
+app = FastAPI(title="Github Tracker API Project")
 
 # Validate frontend URL
 frontend_url = os.getenv("FRONTEND_URL")
