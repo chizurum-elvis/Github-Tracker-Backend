@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse, JSONResponse
 from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
-from backend.redis_client import redis_client
+from redis_client import redis_client
 from dotenv import load_dotenv
 
 load_dotenv()
